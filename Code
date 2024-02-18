@@ -1,1 +1,249 @@
-/
+#Додавання бібліотек
+import pandas as pd
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+import numpy as np
+import scipy.io
+from scipy.signal import  peak_prominences
+from scipy.signal import chirp, find_peaks, peak_widths
+import lmfit
+import seaborn as sns
+from sklearn.neural_network import MLPRegressor
+from sklearn.model_selection import train_test_split  
+from sklearn.metrics import mean_squared_error
+
+#Завантажуємо вихідні файли (перша сторінка кожного файлу) з БД CALCE, що містять дані для визначення шуканих
+# індикаторів здоров'я
+
+#Назва вілповідає даті створення таблиці в базі(місяць_день)
+data1_10 = pd.read_excel('D:/zieit/диплом/CS2_33/1/CS2_33_1_10_11.xlsx', sheet_name = 'Channel_1-006' )
+data1_18 = pd.read_excel('D:/zieit/диплом/CS2_33/1/CS2_33_1_18_11.xlsx', sheet_name = 'Channel_1-006' )
+data1_24 = pd.read_excel('D:/zieit/диплом/CS2_33/1/CS2_33_1_24_11.xlsx', sheet_name = 'Channel_1-006' )
+data1_28 = pd.read_excel('D:/zieit/диплом/CS2_33/1/CS2_33_1_28_11.xlsx', sheet_name = 'Channel_1-006' )
+data2_2 = pd.read_excel('D:/zieit/диплом/CS2_33/1/CS2_33_2_2_11.xlsx', sheet_name = 'Channel_1-006' )
+
+# Змінюємо номера циклів для поєднання в один спільний файл
+data1_18['Cycle_Index'] = data1_18['Cycle_Index']+50
+data1_24['Cycle_Index'] = data1_24['Cycle_Index']+100
+data1_28['Cycle_Index']= data1_28['Cycle_Index']+150
+data2_2['Cycle_Index'] = data2_2['Cycle_Index']+200
+
+#Створюємо один спльний файл з 250 циклами та видаляємо непотрібні стовпці
+data = pd.concat([data1_10,data1_18,data1_24, data1_28,data2_2], ignore_index = True)
+data.drop(['Charge_Energy(Wh)', 'Discharge_Energy(Wh)','dV/dt(V/s)','Internal_Resistance(Ohm)','Is_FC_Data','AC_Impedance(Ohm)','ACI_Phase_Angle(Deg)'], axis= 1 , inplace= True )
+
+#Зберігаємо таблицю
+data.to_csv('D:/zieit/диплом/input_combine_data_table_CS2_33_jan_fab.csv')
+
+#Завантажуємо вихідні файли (друга сторінка кожного файлу) з БД CALCE,що містять дані енергоємності
+
+stat1_10 = pd.read_excel('D:/zieit/диплом/CS2_33/1/CS2_33_1_10_11.xlsx', sheet_name = 'Statistics_1-006' )
+stat1_18 = pd.read_excel('D:/zieit/диплом/CS2_33/1/CS2_33_1_18_11.xlsx', sheet_name = 'Statistics_1-006' )
+stat1_24 = pd.read_excel('D:/zieit/диплом/CS2_33/1/CS2_33_1_24_11.xlsx', sheet_name = 'Statistics_1-006' )
+stat1_28 = pd.read_excel('D:/zieit/диплом/CS2_33/1/CS2_33_1_28_11.xlsx', sheet_name = 'Statistics_1-006' )
+stat2_2 = pd.read_excel('D:/zieit/диплом/CS2_33/1/CS2_33_2_2_11.xlsx', sheet_name = 'Statistics_1-006' )
+
+st10=stat1_10['Discharge_Capacity(Ah)'].diff()
+st18=stat1_18['Discharge_Capacity(Ah)'].diff()
+st24=stat1_24['Discharge_Capacity(Ah)'].diff()
+st28=stat1_28['Discharge_Capacity(Ah)'].diff()
+st2=stat2_2['Discharge_Capacity(Ah)'].diff()
+
+st10.loc[0]=0.890642398586565
+st18.loc[0]=0.712033692877839
+st24.loc[0]=0.583608496280486
+st28.loc[0]=0.389694397878321
+st2.loc[0]=0.156058536631016
+
+#Розрахунок SOH (%soc, номінальний 1,1Аh) 
+soh =np.round(pd.concat([st10, st18,st24,st28,st2 ], ignore_index = True)/1.1, 2)
+
+# Функції
+
+# Фільтр Гаусса
+def gaussian_f(dataframe, s):
+    unfilt = dataframe['dQ/dV']
+    unfiltar = unfilt.values
+    dataframe['G_Smoothed_dQ/dV'] = scipy.ndimage.gaussian_filter(unfiltar, sigma=s)
+    return dataframe
+
+# Повертає висоту, амплітуду та граничні індекси піків
+def peak_fеature(dataframe):
+    width_l = list()
+    prominences_l = list()
+    peaks, _ = find_peaks(cycchargeg['G_Smoothed_dQ/dV'])
+    prominences = peak_prominences(cycchargeg['G_Smoothed_dQ/dV'], peaks)[0]
+    prominences_l.append(prominences) 
+    for i in range(0, len(peaks)):
+        rel_h = (cycchargeg['G_Smoothed_dQ/dV'][peaks].iloc[i] - prominences[i])/cycchargeg['G_Smoothed_dQ/dV'][peaks].iloc[i]
+        rel_h = 1 - rel_h
+        width = peak_widths(cycchargeg['G_Smoothed_dQ/dV'], np.array(peaks[i]).reshape(1))
+        width_l.append(width)    
+    return width_l, prominences_l, peaks
+
+# Повертає таблицю з даними для побудови IC
+def inc_curve(data, n):
+    cyc = data[data['Cycle_Index']==n] # выбираем данные по отдельному циклу
+    cyc['roundedV'] = round(cyc['Voltage(V)'], 3) #округляем
+    cyc = cyc.drop_duplicates(subset=['roundedV','Cycle_Index']) # удаляем дубликаты
+    cyc = cyc.reset_index(drop=True)# переустанавливаем индексы после удаления рядов дупликатов
+    cyc['dV'] = cyc['Voltage(V)'].diff()# добавляем данные интервала напряжения в отдельный столбец
+    cyccharge = cyc[cyc['Current(A)'] > 0]# оставляем только данные заряда батареи
+    cyccharge['Charge_dQ'] = cyccharge['Charge_Capacity(Ah)'].diff()# добавляем данные интервала ёмкости в отдельный столбец
+    cyccharge['dQ/dV'] = cyccharge['Charge_dQ'] /cyccharge['dV']# считаем и добавляем в отдельный столбец dQ/dV
+    cyccharge[['dQ/dV', 'dV', 'Charge_dQ']] = cyccharge[['dQ/dV', 'dV', 'Charge_dQ']].fillna(0)# заполняем 0 отсутств. данные
+    cyccharge = cyccharge[cyccharge['dQ/dV'] >= 0]# оставляем положительные значения
+    return cyccharge
+
+#Повертає результат функції нелінійної регресії методом найменших квадратів бібліотеки Imfit(вбудовані моделі)
+def least_squares(y, x, model_name, param, model):  
+    params = lmfit.Parameters()
+    for i in param:
+        params.add(i, value = 0, min = -np.inf, max = np.inf)
+    result = model.fit(Y_sort, params, x=X_sort)
+    return result
+
+# Підбір стандартного відхилення для фільтра Гаусса (візуально на графіку)
+
+ax = plt.axes()
+ax.set(xlabel='Voltage', ylabel='dQ/dV')
+for cycle in range (1,len(np.unique(np.array(data['Cycle_Index'])))+1, 50):
+    cyccharge = inc_curve(data, cycle)
+    cycchargeg = gaussian_f(cyccharge, 3)# фильтр Гаусса
+    ax.plot(cycchargeg['Voltage(V)'], cyccharge['G_Smoothed_dQ/dV'])# рисуем график c фильтром 
+
+# Побудова кривої, знаходження піків та їх характеристик (крім часу в границіях фіксованого інтервалу напруг)
+#peak_left_border(V)' - ліва границя піку
+#'peak (V)' - напруга на верншині піку
+#'peak_right_border(V)' - права границя піку
+#'capacity_under_peak' - енергоємність в границях піку
+#'prominance' - амплітуда піку
+#'time_to_peak(s)' - час від лівої границі до вершини піку
+#'const_current_time' - час заряду при постійному тоці
+#'fixed_time_to_peak' - час заряду в фіксованому інтервалі напруги від лівої границі до вершини 
+
+#Таблиці для збереження результатів
+dQdV_table = pd.DataFrame(data = None, index = None, columns = data.columns.values.tolist()) # с тремя колонками для Inc curve
+features_table = pd.DataFrame(data = None, index = None, columns = ['cycle','peak_number','peak_left_border(V)', 'peak (V)',
+                                                                'peak_right_border(V)','capacity_under_peak','prominance',
+                                                                'time_to_peak(s)','const_current_time', 'fixed_time_to_peak','soc%'])
+#Розрахунок даних для IC
+for cycle in range (1, len(np.unique(np.array(data['Cycle_Index'])))+1):
+    cyccharge = inc_curve(data, cycle)
+    cycchargeg = gaussian_f(cyccharge, 3)# фильтр Гаусса
+    
+    #Додавання отриманих даних до таблиці
+    dQdV_table = pd.concat([dQdV_table, cycchargeg], ignore_index = True)
+   
+    #Розрахунок границь, амплітуд та вершин піків
+    width, prominences, peaks = peak_fеature(cycchargeg)
+    
+    #Розрахунок характеристик піків та додавання до таблиці
+    w = np.array(width)
+    for i in range(0, len(w)):
+        index_left = cycchargeg['Charge_Capacity(Ah)'][w[i][2].round()].item()# значение єнергоёмкости на границе левого пика
+        index_right = cycchargeg['Charge_Capacity(Ah)'][w[i][3].round()].item()# правого
+        cap = index_right-index_left # энергоёмкость в пределах пика
+        
+        index_left_v =cycchargeg['Voltage(V)'][w[i][2].round()].item() # значение напряжения на границе левого пика
+        index_right_v =cycchargeg['Voltage(V)'][w[i][3].round()].item() # правого
+        peak_v = cycchargeg['Voltage(V)'].iloc[peaks[i]].item()# значение напряжения в пике
+        
+        time_to_peak =cycchargeg[cycchargeg['Voltage(V)']==peak_v]['Test_Time(s)'].item()-cycchargeg[cycchargeg['Voltage(V)']==index_left_v]['Test_Time(s)'].item()
+        const_current_time = cycchargeg[cycchargeg['Step_Index']==2]['Step_Time(s)'].max()
+        features_table.loc[len(features_table.index)] = (cycle, i, index_left_v,  peak_v, index_right_v, cap, np.array(prominences).T[i].item(), time_to_peak,const_current_time, 0,soh[cycle-1])
+        
+    
+    # Збереження таблиць
+    dQdV_table.to_csv('D:/zieit/диплом/data_dq_v/dQ-dV_CS2_33_jan_fab.csv')
+    features_table_csv('D:/zieit/диплом/data_peaks/features_CS2_33_jan_fab.csv')
+
+#Пошук фіксованого інтервалу напруг (взято 1 та 50 цикл)для піку № 0 та додавання даних до таблиці з даними по цьому піку
+#Створення таблиці зрізом з основної
+features_table_0 = features_table[features_table['peak_number']==0.0]
+
+mini = features_table_0[features_table_0['cycle']==2.0]['peak_left_border(V)'].item()
+maxi = features_table_0[features_table_0['cycle']==50.0]['peak (V)'].item()
+
+for i in range (1, 251):
+    t = dQdV_table[dQdV_table['Cycle_Index']==i]
+    t = t[t['Voltage(V)']<maxi]
+    t = t[t['Voltage(V)']>mini]
+    t_fixed=t['Test_Time(s)'].max()-t['Test_Time(s)'].min()
+    features_table_0['fixed_time_to_peak'].loc[i] =t_fixed 
+
+#Заповнення відсутніх значень(пік зникає, починаючи з 233 циклу) та додаємо до нової таблиці
+features_table_0['fixed_time_to_peak'] = features_table_0['fixed_time_to_peak'].fillna(0)
+
+#Регресійний аналіз
+
+#Метод найменши квадратів 
+#Список моделей
+model_list = ['linear_', 'quadratic_', 'qubic_', 'power_']
+
+#Словник параметрів
+param =  {model_list[0]:['linear_intercept', 'linear_slope'],
+          model_list[1]:['quadratic_a','quadratic_b','quadratic_c'], 
+          model_list[2]:['qubic_c0','qubic_c1','qubic_c2','qubic_c3'],
+          model_list[3]:['power_amplitude', 'power_exponent']}
+
+#Словник вбудованих моделей
+model_imfit = [lmfit.models.LinearModel(prefix='linear_'),
+               lmfit.models.QuadraticModel(prefix='quadratic_'),
+               lmfit.models.PolynomialModel(degree=3, prefix='qubic_'),
+               lmfit.models.PowerLawModel(prefix='power_')] 
+#Таблицы для результатів  аналізу
+regression_imfit_table = pd.DataFrame(data = None, index = None, columns =['fiture', 'step', 'number_of_cycles',
+                                                                          'model', 'R2', 'The Mean Square Weighted Deviation (MSWD)'])
+
+#Аналіз
+fitures = list() #список стовпців таблиці
+for label, content in features_table_0.items():
+    fitures.append(label)
+fitures.remove('soc%') 
+fitures.remove('peak_number')
+
+n = 5 #Крок для циклів
+for i in fitures:
+    dataset_sort_df = features_table_0.loc[::n, [i, 'soc%']].sort_values(by=[i]) #Сортування за аргументом функції
+    Y_sort = dataset_sort_df['soc%'].to_xarray()
+    X_sort = dataset_sort_df[i].to_xarray()
+    print (i)
+    for j in range(0, len(model_list)):
+        result = least_squares(Y_sort, X_sort, model_list[j], param[model_list[j]],model_imfit[j]) 
+        regression_imfit_table.loc[len(regression_imfit_table.index)]=(i, n, len(np.unique(np.array(features_table_0['cycle'])))/n,
+                                                                       model_list[j],result.rsquared, result.chisqr)
+#Друк максимальних значень коефіцієнту детермінації
+regression_imfit_table.groupby("fiture", group_keys=True)[['R2', 'model']].max()
+#Збереження таблиці
+regression_imfit_table.to_csv('D:/zieit/диплом/regression_imfit_table_CS2_33_jan_fab.csv')
+
+
+#Метод багатошарового перцептрону
+
+#Таблиця для збереження результатів
+regression_MLP_table = pd.DataFrame(data = None, index = None, columns =['fiture', 'step', 'number_of_cycles',
+                                                                                  'activation', 'solver', 'hidden_layer', 
+                                                                                  'alpha', 'R2', 'RMSE'])
+#Аналіз
+
+n = 1 #(1, 5, 10) Крок по циклах
+f = 'peak (V)' # Назва аргументу функції (індикатору здоров'я) - peak (V), const_current_time, fixed_time_to_peak
+num_of_cecles = len(np.unique(np.array(features_table_0['cycle'])))/n # Кількість циклів взятих для аналізу
+#Формування списку змінних
+X = features_table_0.loc[::n,[f]]
+y = features_table_0.loc[::n,['soc%']]
+#Створення моделі та тестування
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=1) 
+nn = MLPRegressor( activation='tanh', solver = 'lbfgs', hidden_layer_sizes=(int(np.round(num_of_cecles,0)), 100), alpha=0.001, random_state=20, early_stopping=False ) 
+nn.fit(X_train, y_train)
+pred = nn.predict(X_test)
+#Результати статистики
+test_set_rsquared = nn.score(X_test, y_test) 
+test_set_rmse = np.sqrt(mean_squared_error(y_test, pred))
+print('R_squared value: ', test_set_rsquared) 
+print('RMSE: ', test_set_rmse)
+
+#Збереження результатів в таблицю
+regression_MLP_table.loc[len(regression_MLP_table.index)] =(f, n, num_of_cecles,'tanh', 'lbfgs', f'{num_of_cecles}, 100', 0.001, test_set_rsquared, test_set_rmse)
+regression_MLP_table.to_csv('D:/zieit/диплом/regression_MLP_table_CS2_33_jan_fab.csv')
