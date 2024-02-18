@@ -77,7 +77,7 @@ def peak_fеature(dataframe):
     for i in range(0, len(peaks)):
         rel_h = (cycchargeg['G_Smoothed_dQ/dV'][peaks].iloc[i] - prominences[i])/cycchargeg['G_Smoothed_dQ/dV'][peaks].iloc[i]
         rel_h = 1 - rel_h
-        width = peak_widths(cycchargeg['G_Smoothed_dQ/dV'], np.array(peaks[i]).reshape(1))
+        width = peak_widths(cycchargeg['G_Smoothed_dQ/dV'], np.array(peaks[i]).reshape(1), rel_height=rel_h)
         width_l.append(width)    
     return width_l, prominences_l, peaks
 
