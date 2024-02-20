@@ -141,13 +141,13 @@ for cycle in range (1, len(np.unique(np.array(data['Cycle_Index'])))+1):
     #Розрахунок характеристик піків та додавання до таблиці
     w = np.array(width)
     for i in range(0, len(w)):
-        index_left = cycchargeg['Charge_Capacity(Ah)'][w[i][2].round()].item()# значение єнергоёмкости на границе левого пика
-        index_right = cycchargeg['Charge_Capacity(Ah)'][w[i][3].round()].item()# правого
+        index_left = cycchargeg['Charge_Capacity(Ah)'][w[i][2].round()].item()# значення енергоємності на лівій границі піку
+        index_right = cycchargeg['Charge_Capacity(Ah)'][w[i][3].round()].item()# правій
         cap = index_right-index_left # энергоёмкость в пределах пика
         
-        index_left_v =cycchargeg['Voltage(V)'][w[i][2].round()].item() # значение напряжения на границе левого пика
-        index_right_v =cycchargeg['Voltage(V)'][w[i][3].round()].item() # правого
-        peak_v = cycchargeg['Voltage(V)'].iloc[peaks[i]].item()# значение напряжения в пике
+        index_left_v =cycchargeg['Voltage(V)'][w[i][2].round()].item() # значення напруги на лівій границі піку
+        index_right_v =cycchargeg['Voltage(V)'][w[i][3].round()].item() # правій
+        peak_v = cycchargeg['Voltage(V)'].iloc[peaks[i]].item()# значення напруги, що відплвідає вершині піку
         
         time_to_peak =cycchargeg[cycchargeg['Voltage(V)']==peak_v]['Test_Time(s)'].item()-cycchargeg[cycchargeg['Voltage(V)']==index_left_v]['Test_Time(s)'].item()
         const_current_time = cycchargeg[cycchargeg['Step_Index']==2]['Step_Time(s)'].max()
@@ -177,7 +177,7 @@ features_table_0['fixed_time_to_peak'] = features_table_0['fixed_time_to_peak'].
 
 #Регресійний аналіз
 
-#Метод найменши квадратів 
+#Метод найменших квадратів 
 #Список моделей
 model_list = ['linear_', 'quadratic_', 'qubic_', 'power_']
 
@@ -187,36 +187,36 @@ param =  {model_list[0]:['linear_intercept', 'linear_slope'],
           model_list[2]:['qubic_c0','qubic_c1','qubic_c2','qubic_c3'],
           model_list[3]:['power_amplitude', 'power_exponent']}
 
-#Словник вбудованих моделей
-model_imfit = [lmfit.models.LinearModel(prefix='linear_'),
+#Список вбудованих моделей
+model_lmfit = [lmfit.models.LinearModel(prefix='linear_'),
                lmfit.models.QuadraticModel(prefix='quadratic_'),
                lmfit.models.PolynomialModel(degree=3, prefix='qubic_'),
                lmfit.models.PowerLawModel(prefix='power_')] 
 #Таблицы для результатів  аналізу
-regression_imfit_table = pd.DataFrame(data = None, index = None, columns =['fiture', 'step', 'number_of_cycles',
+regression_lmfit_table = pd.DataFrame(data = None, index = None, columns =['feature', 'step', 'number_of_cycles',
                                                                           'model', 'R2', 'The Mean Square Weighted Deviation (MSWD)'])
 
 #Аналіз
-fitures = list() #список стовпців таблиці
+features = list() #список стовпців таблиці
 for label, content in features_table_0.items():
     fitures.append(label)
-fitures.remove('soc%') 
-fitures.remove('peak_number')
+features.remove('soc%') 
+features.remove('peak_number')
 
 n = 5 #Крок для циклів
-for i in fitures:
+for i in features:
     dataset_sort_df = features_table_0.loc[::n, [i, 'soc%']].sort_values(by=[i]) #Сортування за аргументом функції
     Y_sort = dataset_sort_df['soc%'].to_xarray()
     X_sort = dataset_sort_df[i].to_xarray()
     print (i)
     for j in range(0, len(model_list)):
-        result = least_squares(Y_sort, X_sort, model_list[j], param[model_list[j]],model_imfit[j]) 
-        regression_imfit_table.loc[len(regression_imfit_table.index)]=(i, n, len(np.unique(np.array(features_table_0['cycle'])))/n,
+        result = least_squares(Y_sort, X_sort, model_list[j], param[model_list[j]],model_lmfit[j]) 
+        regression_lmfit_table.loc[len(regression_lmfit_table.index)]=(i, n, len(np.unique(np.array(features_table_0['cycle'])))/n,
                                                                        model_list[j],result.rsquared, result.chisqr)
 #Друк максимальних значень коефіцієнту детермінації
-regression_imfit_table.groupby("fiture", group_keys=True)[['R2', 'model']].max()
+regression_lmfit_table.groupby("feature", group_keys=True)[['R2', 'model']].max()
 #Збереження таблиці
-regression_imfit_table.to_csv('D:/zieit/диплом/regression_imfit_table_CS2_33_jan_fab.csv')
+regression_lmfit_table.to_csv('D:/zieit/диплом/regression_lmfit_table_CS2_33_jan_fab.csv')
 
 
 #Метод багатошарового перцептрону
